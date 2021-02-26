@@ -23,6 +23,7 @@ import (
 	"io/ioutil"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -89,7 +90,7 @@ func (handler RestHandler) processAsyncRequest(writer http.ResponseWriter, reque
 		return
 	}
 
-	if resourceName == "json" && request.Header.Get(clients.ContentType) == "application/json" {
+	if strings.HasPrefix(resourceName, "json") && request.Header.Get(clients.ContentType) == "application/json" {
 		data, err := handler.readBodyAsJson(writer, request)
 
 		if err != nil {
