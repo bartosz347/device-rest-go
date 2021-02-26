@@ -18,6 +18,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"math"
@@ -85,6 +86,19 @@ func (handler RestHandler) processAsyncRequest(writer http.ResponseWriter, reque
 	if err != nil {
 		handler.logger.Error(fmt.Sprintf("Incoming reading ignored. Device '%s' not found", deviceName))
 		http.Error(writer, fmt.Sprintf("Device '%s' not found", deviceName), http.StatusNotFound)
+		return
+	}
+
+	if resourceName == "json" && request.Header.Get(clients.ContentType) == "application/json" {
+		data, err := handler.readBodyAsJson(writer, request)
+
+		if err != nil {
+			handler.logger.Error(fmt.Sprintf("Incoming reading ignored. Unable to read request body: %s", err.Error()))
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		handler.processJson(deviceName, writer, data)
 		return
 	}
 
@@ -170,6 +184,17 @@ func (handler RestHandler) readBodyAsBinary(writer http.ResponseWriter, request 
 	}
 
 	return body, nil
+}
+
+func (handler RestHandler) readBodyAsJson(writer http.ResponseWriter, request *http.Request) (map[string]interface{}, error) {
+	defer request.Body.Close()
+	var data map[string]interface{}
+	err := json.NewDecoder(request.Body).Decode(&data)
+	if err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }
 
 func deviceHandler(writer http.ResponseWriter, request *http.Request) {
@@ -292,6 +317,43 @@ func (handler RestHandler) newCommandValue(resourceName string, reading interfac
 	}
 
 	return result, err
+}
+
+// Only flat json structure is supported
+func (handler RestHandler) processJson(deviceName string, writer http.ResponseWriter, data map[string]interface{}) {
+
+	var values []*models.CommandValue
+
+	for key, element := range data {
+		deviceResource, ok := handler.service.DeviceResource(deviceName, key, "get")
+		if !ok {
+			http.Error(writer, fmt.Sprintf("Resource '%s' not found", key), http.StatusNotFound)
+			handler.logger.Error(fmt.Sprintf("Incoming reading ignored. Resource '%s' not found", key))
+			return
+		}
+
+		readingType := models.ParseValueType(deviceResource.Properties.Value.Type)
+		reading := element
+
+		value, err := handler.newCommandValue(key, reading, readingType)
+		if err != nil {
+			handler.logger.Error(
+				fmt.Sprintf("Incoming reading ignored. Unable to create Command Value for Device=%s Command=%s: %s",
+					deviceName, key, err.Error()))
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		values = append(values, value)
+	}
+
+	asyncValues := &models.AsyncValues{
+		DeviceName:    deviceName,
+		CommandValues: values,
+	}
+
+	handler.logger.Debug(fmt.Sprintf("Incoming reading received: Device=%s Resource=%s", deviceName, "json-special"))
+
+	handler.asyncValues <- asyncValues
 }
 
 func checkValueInRange(valueType models.ValueType, reading interface{}) bool {
